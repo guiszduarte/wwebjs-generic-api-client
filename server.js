@@ -34,6 +34,7 @@ app.get('/', (req, res) => {
       // Endpoints de cliente
       'POST /client/create?token=SEU_TOKEN': 'Criar novo cliente',
       'GET /client/:clientId/qr?token=SEU_TOKEN': 'Obter QR Code',
+      'GET /client/:clientId/qr/stats?token=SEU_TOKEN': 'Estatísticas do QR Code',
       'GET /client/:clientId/status?token=SEU_TOKEN': 'Status do cliente',
       'POST /client/:clientId/send?token=SEU_TOKEN': 'Enviar mensagem',
       'DELETE /client/:clientId?token=SEU_TOKEN': 'Remover cliente',
@@ -62,6 +63,7 @@ app.get('/', (req, res) => {
 // Rotas de cliente (existentes)
 app.post('/client/create', authMiddleware, whatsappController.createClient);
 app.get('/client/:clientId/qr', authMiddleware, whatsappController.getQRCode);
+app.get('/client/:clientId/qr/stats', authMiddleware, whatsappController.getQRStats);
 app.get('/client/:clientId/status', authMiddleware, whatsappController.getStatus);
 app.post('/client/:clientId/send', authMiddleware, whatsappController.sendMessage);
 app.delete('/client/:clientId', authMiddleware, whatsappController.removeClient);

@@ -34,50 +34,91 @@ class WhatsAppService {
     });
 
     client.on('qr', async (qr) => {
-      const qrCodeDataURL = await qrcode.toDataURL(qr);
-      const qrData = { qr, qrCodeDataURL, timestamp: new Date() };
-      this.qrCodes.set(clientId, qrData);
-      console.log(`📱 QR Code gerado para cliente: ${clientId}`);
+      try {
+        // Verificar se é um QR code diferente do anterior para evitar spam
+        const qrHash = require('crypto').createHash('md5').update(qr).digest('hex');
+        const lastHash = this.lastQRHashes.get(clientId);
+        const lastGeneration = this.qrGenerationTimestamps.get(clientId) || 0;
+        const now = Date.now();
 
-      this.clientStatus.set(clientId, 'qr_generated'); 
-      
-      // Emitir QR Code via WebSocket
-      this.getWebSocketService().emitQRCode(clientId, qrData);
-      // Emitir mudança de status via WebSocket
-      this.getWebSocketService().emitStatusChange(clientId, 'qr_generated');
+        // Se é o mesmo QR code e foi gerado há menos de 5 segundos, ignorar
+        if (lastHash === qrHash && (now - lastGeneration) < 5000) {
+          return;
+        }
+
+        const qrCodeDataURL = await qrcode.toDataURL(qr);
+        const qrData = { qr, qrCodeDataURL, timestamp: new Date() };
+
+        this.qrCodes.set(clientId, qrData);
+        this.lastQRHashes.set(clientId, qrHash);
+        this.qrGenerationTimestamps.set(clientId, now);
+
+        // Verificar se o status mudou para evitar logs desnecessários
+        const currentStatus = this.clientStatus.get(clientId);
+        if (currentStatus !== 'qr_generated') {
+          console.log(`📱 QR Code gerado para cliente: ${clientId}`);
+          this.clientStatus.set(clientId, 'qr_generated');
+
+          // Emitir mudança de status via WebSocket apenas se mudou
+          this.getWebSocketService().emitStatusChange(clientId, 'qr_generated');
+        } else {
+          console.log(`🔄 QR Code atualizado para cliente: ${clientId} (expiração automática)`);
+        }
+
+        // Sempre emitir o QR Code atualizado via WebSocket
+        this.getWebSocketService().emitQRCode(clientId, qrData);
+
+      } catch (error) {
+        console.error(`Erro ao processar QR code para cliente ${clientId}:`, error.message);
+      }
     });
 
-    client.on('ready', () => { 
-      this.clientStatus.set(clientId, 'ready'); 
+    client.on('ready', () => {
+      const previousStatus = this.clientStatus.get(clientId);
+      this.clientStatus.set(clientId, 'ready');
       this.qrCodes.delete(clientId);
-      console.log(`✅ Cliente ${clientId} pronto!`);
-      
-      // Emitir mudança de status via WebSocket
-      this.getWebSocketService().emitStatusChange(clientId, 'ready');
+      // Limpar dados de controle de QR
+      this.lastQRHashes.delete(clientId);
+      this.qrGenerationTimestamps.delete(clientId);
+
+      if (previousStatus !== 'ready') {
+        console.log(`✅ Cliente ${clientId} pronto!`);
+        // Emitir mudança de status via WebSocket
+        this.getWebSocketService().emitStatusChange(clientId, 'ready');
+      }
     });
 
-    client.on('authenticated', () => { 
+    client.on('authenticated', () => {
+      const previousStatus = this.clientStatus.get(clientId);
       this.clientStatus.set(clientId, 'authenticated');
-      console.log(`🔐 Cliente ${clientId} autenticado`);
-      
-      // Emitir mudança de status via WebSocket
-      this.getWebSocketService().emitStatusChange(clientId, 'authenticated');
+
+      if (previousStatus !== 'authenticated') {
+        console.log(`🔐 Cliente ${clientId} autenticado`);
+        // Emitir mudança de status via WebSocket
+        this.getWebSocketService().emitStatusChange(clientId, 'authenticated');
+      }
     });
 
-    client.on('auth_failure', () => { 
+    client.on('auth_failure', () => {
+      const previousStatus = this.clientStatus.get(clientId);
       this.clientStatus.set(clientId, 'auth_failure');
-      console.log(`❌ Falha na autenticação do cliente ${clientId}`);
-      
-      // Emitir mudança de status via WebSocket
-      this.getWebSocketService().emitStatusChange(clientId, 'auth_failure');
+
+      if (previousStatus !== 'auth_failure') {
+        console.log(`❌ Falha na autenticação do cliente ${clientId}`);
+        // Emitir mudança de status via WebSocket
+        this.getWebSocketService().emitStatusChange(clientId, 'auth_failure');
+      }
     });
 
-    client.on('disconnected', () => { 
+    client.on('disconnected', () => {
+      const previousStatus = this.clientStatus.get(clientId);
       this.clientStatus.set(clientId, 'disconnected');
-      console.log(`🔌 Cliente ${clientId} desconectado`);
-      
-      // Emitir mudança de status via WebSocket
-      this.getWebSocketService().emitStatusChange(clientId, 'disconnected');
+
+      if (previousStatus !== 'disconnected') {
+        console.log(`🔌 Cliente ${clientId} desconectado`);
+        // Emitir mudança de status via WebSocket
+        this.getWebSocketService().emitStatusChange(clientId, 'disconnected');
+      }
     });
 
     client.on('message', async (msg) => {
@@ -239,14 +280,47 @@ class WhatsAppService {
 
   getQRCode(clientId) {
     if (!this.clients.has(clientId)) throw new Error(`Cliente ${clientId} não encontrado`);
+
     const qrData = this.qrCodes.get(clientId);
-    if (!qrData) throw new Error(`QR Code não disponível para o cliente ${clientId}`);
-    return qrData;
+    if (!qrData) throw new Error(`QR Code não disponível para cliente ${clientId}`);
+
+    // Adicionar informações sobre expiração (QR codes do WhatsApp expiram em ~30 segundos)
+    const now = new Date();
+    const qrAge = now - qrData.timestamp;
+    const isExpired = qrAge > 30000; // 30 segundos
+    const timeUntilExpiration = Math.max(0, 30000 - qrAge);
+
+    return {
+      ...qrData,
+      isExpired,
+      ageInSeconds: Math.floor(qrAge / 1000),
+      timeUntilExpirationMs: timeUntilExpiration,
+      timeUntilExpirationSeconds: Math.floor(timeUntilExpiration / 1000)
+    };
   }
 
   getStatus(clientId) {
     const status = this.clientStatus.get(clientId) || 'not_found';
-    return { clientId, status, isReady: status === 'ready' };
+    const result = { clientId, status, isReady: status === 'ready' };
+
+    // Adicionar informações do QR code se disponível
+    if (this.qrCodes.has(clientId)) {
+      const qrData = this.qrCodes.get(clientId);
+      const now = new Date();
+      const qrAge = now - qrData.timestamp;
+      const isExpired = qrAge > 30000;
+
+      result.qrCode = {
+        available: true,
+        isExpired,
+        ageInSeconds: Math.floor(qrAge / 1000),
+        generatedAt: qrData.timestamp
+      };
+    } else {
+      result.qrCode = { available: false };
+    }
+
+    return result;
   }
 
   async sendMessage(clientId, number, message) {
@@ -258,6 +332,26 @@ class WhatsAppService {
   }
 
   // Métodos para gerenciar mensagens recebidas (mantidos iguais)
+
+  // Método para obter estatísticas de QR code
+  getQRStats(clientId) {
+    if (!this.clients.has(clientId)) {
+      throw new Error(`Cliente ${clientId} não encontrado`);
+    }
+
+    const qrData = this.qrCodes.get(clientId);
+    const generationTimestamp = this.qrGenerationTimestamps.get(clientId);
+    const lastHash = this.lastQRHashes.get(clientId);
+
+    return {
+      clientId,
+      hasQRCode: !!qrData,
+      qrGeneratedAt: qrData?.timestamp || null,
+      lastGenerationTimestamp: generationTimestamp || null,
+      hasHash: !!lastHash,
+      status: this.clientStatus.get(clientId) || 'unknown'
+    };
+  }
   getMessages(clientId, options = {}) {
     if (!this.clients.has(clientId)) {
       throw new Error(`Cliente ${clientId} não encontrado`);
@@ -352,13 +446,17 @@ class WhatsAppService {
   async removeClient(clientId) {
     const client = this.clients.get(clientId);
     if (!client) throw new Error(`Cliente ${clientId} não encontrado`);
-    
+
     await client.destroy();
     this.clients.delete(clientId);
     this.clientStatus.delete(clientId);
     this.qrCodes.delete(clientId);
     this.receivedMessages.delete(clientId); // Limpar mensagens do cliente removido
-    
+
+    // Limpar dados de controle de QR code
+    this.lastQRHashes.delete(clientId);
+    this.qrGenerationTimestamps.delete(clientId);
+
     return { success: true, message: `Cliente ${clientId} removido` };
   }
 
@@ -384,6 +482,10 @@ class WhatsAppService {
     this.clientStatus.clear();
     this.qrCodes.clear();
     this.receivedMessages.clear();
+
+    // Limpar dados de controle de QR code
+    this.lastQRHashes.clear();
+    this.qrGenerationTimestamps.clear();
   }
 }
 

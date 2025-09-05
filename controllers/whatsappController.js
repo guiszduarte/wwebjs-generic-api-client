@@ -69,6 +69,17 @@ class WhatsAppController {
     }
   }
 
+  // Novo endpoint para estatísticas do QR code
+  async getQRStats(req, res) {
+    try {
+      const { clientId } = req.params;
+      const stats = whatsappService.getQRStats(clientId);
+      res.json(stats);
+    } catch (error) {
+      res.status(404).json({ error: error.message });
+    }
+  }
+
   // Novos endpoints para gerenciar mensagens recebidas
   async getMessages(req, res) {
     try {
