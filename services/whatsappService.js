@@ -9,6 +9,8 @@ class WhatsAppService {
     this.clientStatus = new Map();
     this.qrCodes = new Map();
     this.receivedMessages = new Map(); // Armazena mensagens recebidas por cliente
+    this.lastQRHashes = new Map(); // Armazena hash do último QR code para evitar duplicatas
+    this.qrGenerationTimestamps = new Map(); // Armazena timestamp da última geração de QR
     this.websocketService = null; // Será inicializado quando necessário
   }
 
@@ -103,6 +105,11 @@ class WhatsAppService {
       const previousStatus = this.clientStatus.get(clientId);
       this.clientStatus.set(clientId, 'auth_failure');
 
+      // Limpar dados de QR code em caso de falha de autenticação
+      this.qrCodes.delete(clientId);
+      this.lastQRHashes.delete(clientId);
+      this.qrGenerationTimestamps.delete(clientId);
+
       if (previousStatus !== 'auth_failure') {
         console.log(`❌ Falha na autenticação do cliente ${clientId}`);
         // Emitir mudança de status via WebSocket
@@ -113,6 +120,11 @@ class WhatsAppService {
     client.on('disconnected', () => {
       const previousStatus = this.clientStatus.get(clientId);
       this.clientStatus.set(clientId, 'disconnected');
+
+      // Limpar dados de QR code em caso de desconexão
+      this.qrCodes.delete(clientId);
+      this.lastQRHashes.delete(clientId);
+      this.qrGenerationTimestamps.delete(clientId);
 
       if (previousStatus !== 'disconnected') {
         console.log(`🔌 Cliente ${clientId} desconectado`);
